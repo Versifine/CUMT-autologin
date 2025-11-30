@@ -1,0 +1,22 @@
+# 构建产物
+*.exe
+*.dll
+*.syso
+*.obj
+*.o
+
+# 配置文件（不要把你自己的密码提交到仓库）
+config.yaml
+
+# IDE / 环境
+.vscode/
+.idea/
+
+# Go 构建缓存
+bin/
+build/
+dist/
+
+# 临时文件
+*.log
+*.tmp
