@@ -1,9 +1,10 @@
-﻿//go:build windows
+//go:build windows
 // +build windows
 
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log"
 	"strings"
@@ -117,14 +118,20 @@ html, body {
   width: 28px;
   height: 28px;
   border-radius: 9px;
-  overflow: hidden;
-  background: none;
-  padding: 0;
+  background: #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(34,197,94,0.4);
 }
+
 .logo-img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  display: block;
 }
 .app-meta {
   display: flex;
@@ -436,15 +443,16 @@ html, body {
 <div class="app">
   <div class="card">
     <header class="card-header">
-      <div class="app-title">
-      <div class="logo">
-         <img src="{{APP_ICON}}" class="logo-img" />
-      </div>
-        <div class="app-meta">
-          <div class="app-meta-main">CUMT Autologin</div>
-          <div class="app-meta-sub">校园网自动登录 · 设置面板</div>
-        </div>
-      </div>
+    <div class="app-title">
+     <div class="logo">
+     <img class="logo-img" src="data:image/x-icon;base64,__ICON_DATA_BASE64__" alt="CUMT Autologin" />
+     </div>
+     <div class="app-meta">
+    <div class="app-meta-main">CUMT Autologin</div>
+    <div class="app-meta-sub">校园网自动登录 · 设置面板</div>
+  </div>
+</div>
+
       <div class="window-actions">
         <div class="chip-mini">
           <span class="chip-dot"></span>
@@ -640,6 +648,18 @@ html, body {
       console.error(e);
     }
   }
+  function saveWindowSize() {
+   if (!window.goSaveWindowSize) return;
+    const width = window.innerWidth || document.documentElement.clientWidth || 0;
+    const height = window.innerHeight || document.documentElement.clientHeight || 0;
+    if (width <= 0 || height <= 0) return;
+    try {
+    window.goSaveWindowSize(width, height);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
 
   function bindEvents() {
     document.getElementById('operatorPills').addEventListener('click', e => {
@@ -648,6 +668,8 @@ html, body {
       state.operator = pill.getAttribute('data-op');
       applyPills('operatorPills', state.operator, 'data-op');
       saveConfig();
+       window.addEventListener('resize', saveWindowSize);
+  window.addEventListener('beforeunload', saveWindowSize);
     });
 
     document.getElementById('loginModePills').addEventListener('click', e => {
@@ -854,6 +876,19 @@ func openSettingsWindow() {
 				log.Println("SetAutoStart failed:", err)
 			}
 		})
+		_ = w.Bind("goSaveWindowSize", func(width, height int) {
+			if globalCfg == nil {
+				return
+			}
+			if width <= 0 || height <= 0 {
+				return
+			}
+			globalCfg.UI.Width = width
+			globalCfg.UI.Height = height
+			if err := globalCfg.Save(); err != nil {
+				log.Println("Save window size failed:", err)
+			}
+		})
 		_ = w.Bind("goGetStatus", func() string {
 			return getStatus()
 		})
@@ -873,8 +908,11 @@ func openSettingsWindow() {
 		_ = w.Bind("goQuitApp", func() {
 			systray.Quit()
 		})
-		html := strings.ReplaceAll(settingsHTML, "{{APP_ICON}}", IconBase64())
+
+		encodedIcon := base64.StdEncoding.EncodeToString(iconData)
+		html := strings.ReplaceAll(settingsHTML, "__ICON_DATA_BASE64__", encodedIcon)
 		w.SetHtml(html)
+
 		w.Run()
 		saveWindowPositionAndSize(w)
 	}()
