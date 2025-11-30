@@ -1,4 +1,4 @@
-﻿package config
+package config
 
 import (
 	"os"
@@ -7,7 +7,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const DefaultConfigPath = "config.yaml"
+const (
+	DefaultConfigPath   = "config.yaml"
+	defaultWindowWidth  = 620
+	defaultWindowHeight = 440
+)
 
 type PortalConfig struct {
 	LoginURL        string            `yaml:"login_url"`
@@ -41,6 +45,11 @@ type Config struct {
 	OpenSettingsOnRun bool   `yaml:"open_settings_on_run" json:"open_settings_on_run"`
 
 	path string `yaml:"-"`
+
+	WindowX int `yaml:"window_x"`
+	WindowY int `yaml:"window_y"`
+	WindowW int `yaml:"window_w"`
+	WindowH int `yaml:"window_h"`
 }
 
 func CarrierSuffix(carrier string) string {
@@ -93,6 +102,18 @@ func Load(path string) (*Config, error) {
 	}
 	if c.UI.Height <= 0 {
 		c.UI.Height = 460
+	}
+	if c.WindowW < 300 {
+		c.WindowW = defaultWindowWidth
+	}
+	if c.WindowH < 300 {
+		c.WindowH = defaultWindowHeight
+	}
+	if _, ok := raw["window_x"]; !ok {
+		c.WindowX = -1
+	}
+	if _, ok := raw["window_y"]; !ok {
+		c.WindowY = -1
 	}
 	if c.AutoLoginInterval <= 0 {
 		c.AutoLoginInterval = 10

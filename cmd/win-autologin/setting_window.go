@@ -6,8 +6,10 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"CUMT-autologin/internal/config"
 
@@ -31,6 +33,12 @@ type viewConfig struct {
 var (
 	settingsMu sync.Mutex
 	settingsW  webview.WebView
+)
+
+const (
+	defaultSettingsWidth  = 620
+	defaultSettingsHeight = 440
+	minSettingsSize       = 300
 )
 
 const settingsHTML = `
@@ -109,16 +117,15 @@ html, body {
   width: 28px;
   height: 28px;
   border-radius: 9px;
-  background: #0f172a;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 15px;
-  color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(34,197,94,0.4);
+  overflow: hidden;
+  background: none;
+  padding: 0;
 }
-
+.logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .app-meta {
   display: flex;
   flex-direction: column;
@@ -430,7 +437,9 @@ html, body {
   <div class="card">
     <header class="card-header">
       <div class="app-title">
-        <div class="logo">Wi</div>
+      <div class="logo">
+         <img src="{{APP_ICON}}" class="logo-img" />
+      </div>
         <div class="app-meta">
           <div class="app-meta-main">CUMT Autologin</div>
           <div class="app-meta-sub">校园网自动登录 · 设置面板</div>
@@ -807,8 +816,27 @@ func openSettingsWindow() {
 		}()
 
 		w.SetTitle("CUMT Autologin 设置")
-		w.SetSize(620, 440, webview.HintNone)
-		centerSettingsWindow(w, 620, 440)
+		width := defaultSettingsWidth
+		height := defaultSettingsHeight
+		x := -1
+		y := -1
+		if globalCfg != nil {
+			if globalCfg.WindowW >= minSettingsSize {
+				width = globalCfg.WindowW
+			}
+			if globalCfg.WindowH >= minSettingsSize {
+				height = globalCfg.WindowH
+			}
+			x = globalCfg.WindowX
+			y = globalCfg.WindowY
+		}
+
+		w.SetSize(width, height, webview.HintNone)
+		if x < 0 || y < 0 {
+			centerSettingsWindow(w, width, height)
+		} else {
+			moveSettingsWindow(w, x, y, width, height)
+		}
 
 		_ = w.Bind("goGetConfig", func() viewConfig {
 			return currentViewConfig()
@@ -845,9 +873,10 @@ func openSettingsWindow() {
 		_ = w.Bind("goQuitApp", func() {
 			systray.Quit()
 		})
-
-		w.SetHtml(settingsHTML)
+		html := strings.ReplaceAll(settingsHTML, "{{APP_ICON}}", IconBase64())
+		w.SetHtml(html)
 		w.Run()
+		saveWindowPositionAndSize(w)
 	}()
 
 }
@@ -896,4 +925,56 @@ func centerSettingsWindow(w webview.WebView, width, height int) {
 			uintptr(1), // bRepaint = TRUE
 		)
 	}()
+}
+
+func moveSettingsWindow(w webview.WebView, x, y int, width, height int) {
+	hwndPtr := w.Window()
+	if hwndPtr == nil {
+		return
+	}
+	hwnd := windows.Handle(uintptr(hwndPtr))
+
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		procMoveWindow.Call(
+			uintptr(hwnd),
+			uintptr(int32(x)),
+			uintptr(int32(y)),
+			uintptr(int32(width)),
+			uintptr(int32(height)),
+			uintptr(1),
+		)
+	}()
+}
+
+func saveWindowPositionAndSize(w webview.WebView) {
+	if globalCfg == nil {
+		return
+	}
+	hwndPtr := w.Window()
+	if hwndPtr == nil {
+		return
+	}
+	hwnd := windows.Handle(uintptr(hwndPtr))
+
+	var rect struct {
+		Left   int32
+		Top    int32
+		Right  int32
+		Bottom int32
+	}
+	procGetWindowRect := user32.NewProc("GetWindowRect")
+	_, _, _ = procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rect)))
+
+	width := rect.Right - rect.Left
+	height := rect.Bottom - rect.Top
+
+	globalCfg.WindowX = int(rect.Left)
+	globalCfg.WindowY = int(rect.Top)
+	globalCfg.WindowW = int(width)
+	globalCfg.WindowH = int(height)
+
+	if err := globalCfg.Save(); err != nil {
+		log.Println("save window position failed:", err)
+	}
 }
