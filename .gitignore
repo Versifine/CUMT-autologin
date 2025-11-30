@@ -1,7 +1,6 @@
 # 构建产物
 *.exe
 *.dll
-*.syso
 *.obj
 *.o
 
