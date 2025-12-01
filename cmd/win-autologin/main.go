@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"time"
 
@@ -27,6 +28,8 @@ var (
 	statusMenu            *systray.MenuItem
 	currentStatusText     = "启动中..."
 	statusMu              sync.RWMutex
+	cfgMu                 sync.RWMutex
+	settingsReqCh         chan struct{}
 )
 
 func setStatus(text string) {
@@ -45,11 +48,52 @@ func getStatus() string {
 	return currentStatusText
 }
 
-func runDaemon(cfg *config.Config, stopCh <-chan struct{}) {
+// snapshotConfig returns a deep-ish copy of globalCfg for safe concurrent use.
+func snapshotConfig() *config.Config {
+	cfgMu.RLock()
+	defer cfgMu.RUnlock()
+	if globalCfg == nil {
+		return nil
+	}
+
+	c := *globalCfg
+	if globalCfg.Portal.Form != nil {
+		c.Portal.Form = make(map[string]string, len(globalCfg.Portal.Form))
+		for k, v := range globalCfg.Portal.Form {
+			c.Portal.Form[k] = v
+		}
+	}
+	if globalCfg.Portal.LogoutForm != nil {
+		c.Portal.LogoutForm = make(map[string]string, len(globalCfg.Portal.LogoutForm))
+		for k, v := range globalCfg.Portal.LogoutForm {
+			c.Portal.LogoutForm[k] = v
+		}
+	}
+	if globalCfg.Portal.Headers != nil {
+		c.Portal.Headers = make(map[string]string, len(globalCfg.Portal.Headers))
+		for k, v := range globalCfg.Portal.Headers {
+			c.Portal.Headers[k] = v
+		}
+	}
+	if globalCfg.Portal.SuccessKeywords != nil {
+		c.Portal.SuccessKeywords = append([]string(nil), globalCfg.Portal.SuccessKeywords...)
+	}
+
+	return &c
+}
+
+func runDaemon(_ *config.Config, stopCh <-chan struct{}) {
 	forceLoginInterval := 2 * time.Minute
 	var lastLoginTime time.Time
 
 	for {
+		cfg := snapshotConfig()
+		if cfg == nil {
+			setStatus("配置未加载")
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
 		interval := cfg.AutoLoginInterval
 		if interval <= 0 {
 			interval = 10
@@ -126,6 +170,12 @@ func runDaemon(cfg *config.Config, stopCh <-chan struct{}) {
 }
 
 func updateLoginAccountFields() {
+	cfgMu.Lock()
+	defer cfgMu.Unlock()
+	updateLoginAccountFieldsLocked()
+}
+
+func updateLoginAccountFieldsLocked() {
 	if globalCfg == nil {
 		return
 	}
@@ -167,6 +217,9 @@ func main() {
 	}
 	updateLoginAccountFields()
 
+	settingsReqCh = make(chan struct{}, 1)
+	go settingsThread()
+
 	systray.Run(onReady, onExit)
 }
 
@@ -195,12 +248,21 @@ func onReady() {
 	stopCh := make(chan struct{})
 	go runDaemon(globalCfg, stopCh)
 
-	if err := config.SetAutoStart(globalCfg.AutoStart); err != nil {
+	cfgMu.RLock()
+	initialAutoStart := false
+	initialOpenSettings := false
+	if globalCfg != nil {
+		initialAutoStart = globalCfg.AutoStart
+		initialOpenSettings = globalCfg.OpenSettingsOnRun
+	}
+	cfgMu.RUnlock()
+
+	if err := config.SetAutoStart(initialAutoStart); err != nil {
 		log.Println("SetAutoStart on startup failed:", err)
 	}
 
-	if globalCfg.OpenSettingsOnRun {
-		openSettingsWindow()
+	if initialOpenSettings {
+		requestOpenSettings()
 	}
 
 	go func() {
@@ -213,24 +275,32 @@ func onReady() {
 				go logoutOnce()
 
 			case <-mOpenSettings.ClickedCh:
-				openSettingsWindow()
+				requestOpenSettings()
 
 			case <-mOpenConfig.ClickedCh:
 				openConfig()
 
 			case <-mModeCarrier.ClickedCh:
+				cfgMu.Lock()
 				loginUseCarrierSuffix = true
-				globalCfg.LoginMode = "operator_id"
+				if globalCfg != nil {
+					globalCfg.LoginMode = "operator_id"
+				}
+				updateLoginAccountFieldsLocked()
+				cfgMu.Unlock()
 				mModeCarrier.Check()
 				mModeCampus.Uncheck()
-				updateLoginAccountFields()
 
 			case <-mModeCampus.ClickedCh:
+				cfgMu.Lock()
 				loginUseCarrierSuffix = false
-				globalCfg.LoginMode = "campus_only"
+				if globalCfg != nil {
+					globalCfg.LoginMode = "campus_only"
+				}
+				updateLoginAccountFieldsLocked()
+				cfgMu.Unlock()
 				mModeCarrier.Uncheck()
 				mModeCampus.Check()
-				updateLoginAccountFields()
 
 			case <-mQuit.ClickedCh:
 				close(stopCh)
@@ -245,16 +315,47 @@ func onExit() {
 	fmt.Println("[INFO] systray exiting")
 }
 
+func requestOpenSettings() {
+	if settingsReqCh == nil {
+		return
+	}
+	select {
+	case settingsReqCh <- struct{}{}:
+	default:
+		// already requested/ opening
+	}
+}
+
 func loginOnce() {
-	updateLoginAccountFields()
+	cfg := snapshotConfig()
+	if cfg == nil {
+		setStatus("配置未加载")
+		return
+	}
+	cfgMu.RLock()
+	useCarrier := loginUseCarrierSuffix
+	cfgMu.RUnlock()
+	acc := cfg.Account
+	var userAccount string
+	if useCarrier {
+		userAccount = acc.StudentID + config.CarrierSuffix(acc.Carrier)
+	} else {
+		userAccount = acc.StudentID
+	}
+	if cfg.Portal.Form == nil {
+		cfg.Portal.Form = make(map[string]string)
+	}
+	cfg.Portal.Form["user_account"] = userAccount
+	cfg.Portal.Form["user_password"] = acc.Password
+
 	setStatus("手动登录中...")
-	body, err := portal.Login(&globalCfg.Portal)
+	body, err := portal.Login(&cfg.Portal)
 	if err != nil {
 		fmt.Println("[ERROR] manual login error:", err)
 		setStatus("手动登录失败")
 		return
 	}
-	if portal.IsLoginSuccess(body, &globalCfg.Portal) {
+	if portal.IsLoginSuccess(body, &cfg.Portal) {
 		fmt.Println("[INFO] manual login success")
 		setStatus("在线（手动登录成功）")
 	} else {
@@ -263,10 +364,23 @@ func loginOnce() {
 	}
 }
 
+// settingsThread runs webview on a dedicated, locked OS thread to avoid cross-thread issues.
+func settingsThread() {
+	runtime.LockOSThread()
+	for range settingsReqCh {
+		openSettingsWindow()
+	}
+}
+
 func logoutOnce() {
 	fmt.Println("[INFO] manual logout triggered from tray")
 	setStatus("手动注销中...")
-	body, err := portal.Logout(&globalCfg.Portal)
+	cfg := snapshotConfig()
+	if cfg == nil {
+		setStatus("配置未加载")
+		return
+	}
+	body, err := portal.Logout(&cfg.Portal)
 	if err != nil {
 		fmt.Println("[ERROR] logout error:", err)
 		setStatus("注销失败（请求错误）")
@@ -277,7 +391,7 @@ func logoutOnce() {
 		setStatus("未配置注销参数")
 		return
 	}
-	if portal.IsLoginSuccess(body, &globalCfg.Portal) {
+	if portal.IsLoginSuccess(body, &cfg.Portal) {
 		fmt.Println("[INFO] logout response looks success")
 		setStatus("已注销")
 	} else {

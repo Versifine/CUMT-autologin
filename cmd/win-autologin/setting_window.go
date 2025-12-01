@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -32,15 +33,29 @@ type viewConfig struct {
 }
 
 var (
-	settingsMu sync.Mutex
-	settingsW  webview.WebView
+	settingsMu  sync.Mutex
+	settingsW   webview.WebView
+	windowLogMu sync.Mutex
 )
 
 const (
-	defaultSettingsWidth  = 620
-	defaultSettingsHeight = 440
+	defaultSettingsWidth  = 950
+	defaultSettingsHeight = 800
 	minSettingsSize       = 300
 )
+
+func logWindow(format string, args ...any) {
+	windowLogMu.Lock()
+	defer windowLogMu.Unlock()
+	msg := fmt.Sprintf("[%s] %s\n", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...))
+	f, err := os.OpenFile("window_debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Println("open window_debug.log failed:", err)
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(msg)
+}
 
 const settingsHTML = `
 <!doctype html>
@@ -114,6 +129,7 @@ html, body {
   gap: 10px;
 }
 
+
 .logo {
   width: 28px;
   height: 28px;
@@ -122,16 +138,13 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
-  font-size: 15px;
-  color: var(--accent);
   box-shadow: 0 0 0 1px rgba(34,197,94,0.4);
+  padding: 0;
 }
 
 .logo-img {
-  width: 100%;
-  height: 100%;
-  display: block;
+  width: 18px;
+  height: 18px;
 }
 .app-meta {
   display: flex;
@@ -443,15 +456,15 @@ html, body {
 <div class="app">
   <div class="card">
     <header class="card-header">
-    <div class="app-title">
-     <div class="logo">
-     <img class="logo-img" src="data:image/x-icon;base64,__ICON_DATA_BASE64__" alt="CUMT Autologin" />
-     </div>
-     <div class="app-meta">
-    <div class="app-meta-main">CUMT Autologin</div>
-    <div class="app-meta-sub">校园网自动登录 · 设置面板</div>
-  </div>
-</div>
+      <div class="app-title">
+        <div class="logo">
+          <img src="data:image/x-icon;base64,__ICON_BASE64__" class="logo-img" />
+        </div>
+        <div class="app-meta">
+          <div class="app-meta-main">CUMT Autologin</div>
+          <div class="app-meta-sub">校园网自动登录 · 设置面板</div>
+        </div>
+      </div>
 
       <div class="window-actions">
         <div class="chip-mini">
@@ -648,19 +661,6 @@ html, body {
       console.error(e);
     }
   }
-  function saveWindowSize() {
-   if (!window.goSaveWindowSize) return;
-    const width = window.innerWidth || document.documentElement.clientWidth || 0;
-    const height = window.innerHeight || document.documentElement.clientHeight || 0;
-    if (width <= 0 || height <= 0) return;
-    try {
-    window.goSaveWindowSize(width, height);
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-
   function bindEvents() {
     document.getElementById('operatorPills').addEventListener('click', e => {
       const pill = e.target.closest('.pill');
@@ -668,8 +668,6 @@ html, body {
       state.operator = pill.getAttribute('data-op');
       applyPills('operatorPills', state.operator, 'data-op');
       saveConfig();
-       window.addEventListener('resize', saveWindowSize);
-  window.addEventListener('beforeunload', saveWindowSize);
     });
 
     document.getElementById('loginModePills').addEventListener('click', e => {
@@ -716,10 +714,9 @@ html, body {
   function applyStatusToUI(text) {
     const statusEl = document.getElementById('statusText');
     const footerEl = document.getElementById('footerStatus');
-    if (statusEl) statusEl.textContent = text || '未知';
-    if (footerEl) footerEl.textContent = text || '后台循环检测中…';
+    if (statusEl) statusEl.textContent = text || '??';
+    if (footerEl) footerEl.textContent = text || '????????';
   }
-
   async function pollStatusLoop() {
     if (!window.goGetStatus) return;
     while (true) {
@@ -729,7 +726,7 @@ html, body {
       } catch (e) {
         console.error('poll status error', e);
       }
-      await new Promise(r => setTimeout(r, 1000)); // 每秒刷新一次
+      await new Promise(r => setTimeout(r, 1000)); // ??????
     }
   }
   window.addEventListener('DOMContentLoaded', () => {
@@ -739,6 +736,19 @@ html, body {
   });
 </script>
 </body>
+</html>
+`
+
+const loadingHTML = `
+<!doctype html>
+<html>
+<head>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#020617;}
+  .loading{display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af;font-family:system-ui;font-size:13px;}
+</style>
+</head>
+<body><div class="loading">加载设置面板...</div></body>
 </html>
 `
 
@@ -752,6 +762,8 @@ func currentViewConfig() viewConfig {
 		BuildInfo:         buildInfo,
 	}
 
+	cfgMu.RLock()
+	defer cfgMu.RUnlock()
 	if globalCfg == nil {
 		return vc
 	}
@@ -775,6 +787,9 @@ func currentViewConfig() viewConfig {
 }
 
 func applyViewConfig(vc viewConfig) error {
+	cfgMu.Lock()
+	defer cfgMu.Unlock()
+
 	if globalCfg == nil {
 		return fmt.Errorf("config not loaded")
 	}
@@ -805,7 +820,7 @@ func applyViewConfig(vc viewConfig) error {
 		globalCfg.LoginMode = "operator_id"
 	}
 
-	updateLoginAccountFields()
+	updateLoginAccountFieldsLocked()
 
 	if err := globalCfg.Save(); err != nil {
 		return err
@@ -825,115 +840,166 @@ func openSettingsWindow() {
 	}
 	settingsMu.Unlock()
 
-	go func() {
-		w := webview.New(false)
+	w := webview.New(false)
+	settingsMu.Lock()
+	settingsW = w
+	settingsMu.Unlock()
+	logWindow("openSettingsWindow: webview created ptr=%p", w.Window())
+	defer func() {
+		logWindow("openSettingsWindow: webview exiting ptr=%p", w.Window())
+		w.Destroy()
 		settingsMu.Lock()
-		settingsW = w
+		settingsW = nil
 		settingsMu.Unlock()
-		defer func() {
-			w.Destroy()
-			settingsMu.Lock()
-			settingsW = nil
-			settingsMu.Unlock()
-		}()
-
-		w.SetTitle("CUMT Autologin 设置")
-		width := defaultSettingsWidth
-		height := defaultSettingsHeight
-		x := -1
-		y := -1
-		if globalCfg != nil {
-			if globalCfg.WindowW >= minSettingsSize {
-				width = globalCfg.WindowW
-			}
-			if globalCfg.WindowH >= minSettingsSize {
-				height = globalCfg.WindowH
-			}
-			x = globalCfg.WindowX
-			y = globalCfg.WindowY
-		}
-
-		w.SetSize(width, height, webview.HintNone)
-		if x < 0 || y < 0 {
-			centerSettingsWindow(w, width, height)
-		} else {
-			moveSettingsWindow(w, x, y, width, height)
-		}
-
-		_ = w.Bind("goGetConfig", func() viewConfig {
-			return currentViewConfig()
-		})
-
-		_ = w.Bind("goSaveConfig", func(vc viewConfig) error {
-			return applyViewConfig(vc)
-		})
-
-		_ = w.Bind("goSetAutoStart", func(enabled bool) {
-			if globalCfg != nil {
-				globalCfg.AutoStart = enabled
-			}
-			if err := config.SetAutoStart(enabled); err != nil {
-				log.Println("SetAutoStart failed:", err)
-			}
-		})
-		_ = w.Bind("goSaveWindowSize", func(width, height int) {
-			if globalCfg == nil {
-				return
-			}
-			if width <= 0 || height <= 0 {
-				return
-			}
-			globalCfg.UI.Width = width
-			globalCfg.UI.Height = height
-			if err := globalCfg.Save(); err != nil {
-				log.Println("Save window size failed:", err)
-			}
-		})
-		_ = w.Bind("goGetStatus", func() string {
-			return getStatus()
-		})
-
-		_ = w.Bind("goLoginNow", func() {
-			go loginOnce()
-		})
-
-		_ = w.Bind("goLogoutNow", func() {
-			go logoutOnce()
-		})
-
-		_ = w.Bind("goOpenConfigFile", func() {
-			go openConfig()
-		})
-
-		_ = w.Bind("goQuitApp", func() {
-			systray.Quit()
-		})
-
-		encodedIcon := base64.StdEncoding.EncodeToString(iconData)
-		html := strings.ReplaceAll(settingsHTML, "__ICON_DATA_BASE64__", encodedIcon)
-		w.SetHtml(html)
-
-		w.Run()
-		saveWindowPositionAndSize(w)
 	}()
 
+	w.SetTitle("CUMT Autologin 设置")
+	// 固定默认尺寸并居中，避免频繁保存/读取导致窗口异常放大
+	width := defaultSettingsWidth
+	height := defaultSettingsHeight
+	w.SetSize(width, height, webview.HintNone)
+	centerSettingsWindow(w, width, height)
+
+	// 先用一个深色占位，减少白屏闪烁
+	w.SetHtml(loadingHTML)
+
+	_ = w.Bind("goGetConfig", func() viewConfig {
+		return currentViewConfig()
+	})
+
+	_ = w.Bind("goSaveConfig", func(vc viewConfig) error {
+		return applyViewConfig(vc)
+	})
+
+	_ = w.Bind("goSetAutoStart", func(enabled bool) {
+		cfgMu.Lock()
+		if globalCfg != nil {
+			globalCfg.AutoStart = enabled
+		}
+		cfgMu.Unlock()
+		if err := config.SetAutoStart(enabled); err != nil {
+			log.Println("SetAutoStart failed:", err)
+		}
+	})
+	_ = w.Bind("goGetStatus", func() string {
+		return getStatus()
+	})
+
+	_ = w.Bind("goLoginNow", func() {
+		go loginOnce()
+	})
+
+	_ = w.Bind("goLogoutNow", func() {
+		go logoutOnce()
+	})
+
+	_ = w.Bind("goOpenConfigFile", func() {
+		go openConfig()
+	})
+
+	_ = w.Bind("goQuitApp", func() {
+		systray.Quit()
+	})
+
+	iconB64 := ""
+	if len(iconData) > 0 {
+		iconB64 = base64.StdEncoding.EncodeToString(iconData)
+	}
+	html := strings.ReplaceAll(settingsHTML, "__ICON_BASE64__", iconB64)
+
+	logWindow("set html and run webview ptr=%p", w.Window())
+	w.SetHtml(html)
+	w.Run()
+	logWindow("openSettingsWindow: webview run returned ptr=%p", w.Window())
 }
 
 var (
-	user32               = windows.NewLazySystemDLL("user32.dll")
-	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
-	procMoveWindow       = user32.NewProc("MoveWindow")
+	user32                 = windows.NewLazySystemDLL("user32.dll")
+	procGetSystemMetrics   = user32.NewProc("GetSystemMetrics")
+	procMoveWindow         = user32.NewProc("MoveWindow")
+	procGetWindowRect      = user32.NewProc("GetWindowRect")
+	procGetWindowPlacement = user32.NewProc("GetWindowPlacement")
 )
 
 const (
-	SM_CXSCREEN = 0
-	SM_CYSCREEN = 1
+	SM_CXSCREEN        = 0
+	SM_CYSCREEN        = 1
+	SM_XVIRTUALSCREEN  = 76
+	SM_YVIRTUALSCREEN  = 77
+	SM_CXVIRTUALSCREEN = 78
+	SM_CYVIRTUALSCREEN = 79
+
+	SW_SHOWNORMAL    = 1
+	SW_SHOWMINIMIZED = 2
+	SW_SHOWMAXIMIZED = 3
 )
 
 func getSystemMetrics(idx int32) int32 {
 	r, _, _ := procGetSystemMetrics.Call(uintptr(idx))
 	return int32(r)
 }
+
+func initialWindowBounds() (width, height, x, y int) {
+	// 固定默认尺寸，位置交给居中逻辑
+	return defaultSettingsWidth, defaultSettingsHeight, -1, -1
+}
+
+func screenBounds() (x, y, w, h int) {
+	// 优先虚拟屏，兼容多显示器
+	vx := int(getSystemMetrics(SM_XVIRTUALSCREEN))
+	vy := int(getSystemMetrics(SM_YVIRTUALSCREEN))
+	vw := int(getSystemMetrics(SM_CXVIRTUALSCREEN))
+	vh := int(getSystemMetrics(SM_CYVIRTUALSCREEN))
+	if vw > 0 && vh > 0 {
+		return vx, vy, vw, vh
+	}
+	// 退回主屏
+	return 0, 0, int(getSystemMetrics(SM_CXSCREEN)), int(getSystemMetrics(SM_CYSCREEN))
+}
+
+func getWindowRect(w webview.WebView) (windows.Rect, int, bool) {
+	var rect windows.Rect
+	hwndPtr := w.Window()
+	if hwndPtr == nil {
+		logWindow("getWindowRect: hwnd nil")
+		return rect, 0, false
+	}
+	hwnd := windows.Handle(uintptr(hwndPtr))
+
+	wp := struct {
+		Length  uint32
+		Flags   uint32
+		ShowCmd uint32
+		MinPos  struct{ X, Y int32 }
+		MaxPos  struct{ X, Y int32 }
+		NormPos windows.Rect
+	}{Length: uint32(unsafe.Sizeof(struct {
+		Length  uint32
+		Flags   uint32
+		ShowCmd uint32
+		MinPos  struct{ X, Y int32 }
+		MaxPos  struct{ X, Y int32 }
+		NormPos windows.Rect
+	}{}))}
+	if r, _, _ := procGetWindowPlacement.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&wp))); r == 0 {
+		logWindow("getWindowRect: GetWindowPlacement failed hwnd=%p", hwndPtr)
+		return rect, 0, false
+	}
+	show := int(wp.ShowCmd)
+
+	r, _, _ := procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rect)))
+	if r == 0 {
+		logWindow("getWindowRect: GetWindowRect failed hwnd=%p", hwndPtr)
+		return rect, show, false
+	}
+	return rect, show, true
+}
+
+// trackWindowRect disabled to avoid resizing issues
+func trackWindowRect(w webview.WebView, stop <-chan struct{}, lastRect *windows.Rect, rectMu *sync.Mutex) {
+}
+
+func saveRect(rect windows.Rect) {}
 
 func centerSettingsWindow(w webview.WebView, width, height int) {
 	hwndPtr := w.Window()
@@ -952,17 +1018,14 @@ func centerSettingsWindow(w webview.WebView, width, height int) {
 	y := (screenH - int32(height)) / 3 // 稍微偏上看起来舒服点
 
 	// 延迟一点再移，保证窗口已经创建好
-	go func() {
-		time.Sleep(80 * time.Millisecond)
-		procMoveWindow.Call(
-			uintptr(hwnd),
-			uintptr(x),
-			uintptr(y),
-			uintptr(int32(width)),
-			uintptr(int32(height)),
-			uintptr(1), // bRepaint = TRUE
-		)
-	}()
+	procMoveWindow.Call(
+		uintptr(hwnd),
+		uintptr(x),
+		uintptr(y),
+		uintptr(int32(width)),
+		uintptr(int32(height)),
+		uintptr(1), // bRepaint = TRUE
+	)
 }
 
 func moveSettingsWindow(w webview.WebView, x, y int, width, height int) {
@@ -972,47 +1035,12 @@ func moveSettingsWindow(w webview.WebView, x, y int, width, height int) {
 	}
 	hwnd := windows.Handle(uintptr(hwndPtr))
 
-	go func() {
-		time.Sleep(80 * time.Millisecond)
-		procMoveWindow.Call(
-			uintptr(hwnd),
-			uintptr(int32(x)),
-			uintptr(int32(y)),
-			uintptr(int32(width)),
-			uintptr(int32(height)),
-			uintptr(1),
-		)
-	}()
-}
-
-func saveWindowPositionAndSize(w webview.WebView) {
-	if globalCfg == nil {
-		return
-	}
-	hwndPtr := w.Window()
-	if hwndPtr == nil {
-		return
-	}
-	hwnd := windows.Handle(uintptr(hwndPtr))
-
-	var rect struct {
-		Left   int32
-		Top    int32
-		Right  int32
-		Bottom int32
-	}
-	procGetWindowRect := user32.NewProc("GetWindowRect")
-	_, _, _ = procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rect)))
-
-	width := rect.Right - rect.Left
-	height := rect.Bottom - rect.Top
-
-	globalCfg.WindowX = int(rect.Left)
-	globalCfg.WindowY = int(rect.Top)
-	globalCfg.WindowW = int(width)
-	globalCfg.WindowH = int(height)
-
-	if err := globalCfg.Save(); err != nil {
-		log.Println("save window position failed:", err)
-	}
+	procMoveWindow.Call(
+		uintptr(hwnd),
+		uintptr(int32(x)),
+		uintptr(int32(y)),
+		uintptr(int32(width)),
+		uintptr(int32(height)),
+		uintptr(1),
+	)
 }

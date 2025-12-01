@@ -98,10 +98,10 @@ func Load(path string) (*Config, error) {
 		c.Portal.LogoutForm = make(map[string]string)
 	}
 	if c.UI.Width <= 0 {
-		c.UI.Width = 400
+		c.UI.Width = 720
 	}
 	if c.UI.Height <= 0 {
-		c.UI.Height = 460
+		c.UI.Height = 520
 	}
 	if c.WindowW < 300 {
 		c.WindowW = defaultWindowWidth
