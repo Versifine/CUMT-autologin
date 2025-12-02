@@ -2,16 +2,18 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	DefaultConfigPath   = "config.yaml"
 	defaultWindowWidth  = 620
 	defaultWindowHeight = 440
 )
+
+var DefaultConfigPath = detectDefaultConfigPath()
 
 type PortalConfig struct {
 	LoginURL        string            `yaml:"login_url"`
@@ -50,6 +52,27 @@ type Config struct {
 	WindowY int `yaml:"window_y"`
 	WindowW int `yaml:"window_w"`
 	WindowH int `yaml:"window_h"`
+}
+
+func detectDefaultConfigPath() string {
+	var exeCandidate string
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		exeCandidate = filepath.Join(exeDir, "config.yaml")
+		if _, err := os.Stat(exeCandidate); err == nil {
+			return exeCandidate
+		}
+	}
+
+	// When running from source, config.yaml is typically in the working directory.
+	if _, err := os.Stat("config.yaml"); err == nil {
+		return "config.yaml"
+	}
+
+	if exeCandidate != "" {
+		return exeCandidate
+	}
+	return "config.yaml"
 }
 
 func CarrierSuffix(carrier string) string {

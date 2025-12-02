@@ -5,7 +5,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"runtime"
@@ -31,6 +30,8 @@ var (
 	cfgMu                 sync.RWMutex
 	settingsReqCh         chan struct{}
 )
+
+const enableBackgroundLoop = false
 
 func setStatus(text string) {
 	statusMu.Lock()
@@ -245,21 +246,18 @@ func onReady() {
 
 	mQuit := systray.AddMenuItem("退出", "退出自动登录")
 
-	stopCh := make(chan struct{})
-	go runDaemon(globalCfg, stopCh)
+	var stopCh chan struct{}
+	if enableBackgroundLoop {
+		stopCh = make(chan struct{})
+		go runDaemon(globalCfg, stopCh)
+	}
 
 	cfgMu.RLock()
-	initialAutoStart := false
 	initialOpenSettings := false
 	if globalCfg != nil {
-		initialAutoStart = globalCfg.AutoStart
 		initialOpenSettings = globalCfg.OpenSettingsOnRun
 	}
 	cfgMu.RUnlock()
-
-	if err := config.SetAutoStart(initialAutoStart); err != nil {
-		log.Println("SetAutoStart on startup failed:", err)
-	}
 
 	if initialOpenSettings {
 		requestOpenSettings()
@@ -303,7 +301,9 @@ func onReady() {
 				mModeCampus.Check()
 
 			case <-mQuit.ClickedCh:
-				close(stopCh)
+				if stopCh != nil {
+					close(stopCh)
+				}
 				systray.Quit()
 				return
 			}

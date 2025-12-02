@@ -51,6 +51,9 @@ func NewApp() *App {
 // Startup is invoked by Wails once the runtime is ready.
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
+	// Ensure window is visible and centered even if last saved position was off-screen.
+	runtime.WindowShow(a.ctx)
+	runtime.WindowCenter(a.ctx)
 	a.setupTray()
 	a.startBackgroundLoop()
 }
@@ -79,8 +82,6 @@ func (a *App) SaveConfig(cfg *appconfig.Config) error {
 	if err := cfg.Save(); err != nil {
 		return err
 	}
-	// Best-effort auto-start sync; failure is non-fatal.
-	_ = appconfig.SetAutoStart(cfg.AutoStart)
 	return nil
 }
 

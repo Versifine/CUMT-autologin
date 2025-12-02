@@ -682,9 +682,6 @@ html, body {
       state.autoStart = !state.autoStart;
       toggleSwitch(document.getElementById('autoStartSwitch'), state.autoStart);
       saveConfig();
-      if (window.goSetAutoStart) {
-        window.goSetAutoStart(state.autoStart);
-      }
     });
 
     document.getElementById('openOnRunItem').addEventListener('click', () => {
@@ -825,9 +822,6 @@ func applyViewConfig(vc viewConfig) error {
 	if err := globalCfg.Save(); err != nil {
 		return err
 	}
-	if err := config.SetAutoStart(globalCfg.AutoStart); err != nil {
-		log.Println("SetAutoStart failed:", err)
-	}
 
 	return nil
 }
@@ -871,16 +865,6 @@ func openSettingsWindow() {
 		return applyViewConfig(vc)
 	})
 
-	_ = w.Bind("goSetAutoStart", func(enabled bool) {
-		cfgMu.Lock()
-		if globalCfg != nil {
-			globalCfg.AutoStart = enabled
-		}
-		cfgMu.Unlock()
-		if err := config.SetAutoStart(enabled); err != nil {
-			log.Println("SetAutoStart failed:", err)
-		}
-	})
 	_ = w.Bind("goGetStatus", func() string {
 		return getStatus()
 	})

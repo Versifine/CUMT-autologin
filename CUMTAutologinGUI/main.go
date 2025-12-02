@@ -2,6 +2,10 @@ package main
 
 import (
 	"embed"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -13,6 +17,11 @@ import (
 var assets embed.FS
 
 func main() {
+	if !ensureSingleInstance() {
+		return
+	}
+	defer releaseSingleInstance()
+	initLogging()
 	// Create an instance of the app structure
 	app := NewApp()
 
@@ -38,5 +47,23 @@ func main() {
 
 	if err != nil {
 		println("Error:", err.Error())
+		log.Printf("[gui] wails run error: %v", err)
 	}
+}
+
+func initLogging() {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("[gui] get executable path error: %v", err)
+		return
+	}
+	exeDir := filepath.Dir(exe)
+	logPath := filepath.Join(exeDir, "gui_app.log")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("[gui] open log file error: %v", err)
+		return
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	log.Printf("[gui] logging to %s", logPath)
 }
